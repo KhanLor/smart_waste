@@ -79,6 +79,31 @@ $username = $_SESSION['username'] ?? 'Collector';
     let collectorsLayer = L.layerGroup().addTo(map);
     const markersByCollector = {}; // keyed by collector_id
 
+    // Collector truck icon
+    const collectorIcon = L.icon({
+        iconUrl: '../../assets/collector_icon.png',
+        iconSize: [40, 40],
+        iconAnchor: [20, 20],
+        popupAnchor: [0, -18]
+    });
+    // Helper: create a rotated icon marker using CSS transform on the DOM element
+    function createRotatingMarker(latlng, headingDeg, opts = {}) {
+        const el = document.createElement('img');
+        el.src = collectorIcon.options.iconUrl;
+        el.style.width = (collectorIcon.options.iconSize[0] || 40) + 'px';
+        el.style.height = (collectorIcon.options.iconSize[1] || 40) + 'px';
+        el.style.transform = `rotate(${headingDeg || 0}deg)`;
+        el.style.transformOrigin = '50% 50%';
+        el.style.pointerEvents = 'auto';
+        const icon = L.divIcon({
+            className: 'collector-icon-wrapper',
+            html: el.outerHTML,
+            iconSize: collectorIcon.options.iconSize,
+            iconAnchor: collectorIcon.options.iconAnchor
+        });
+        return L.marker(latlng, Object.assign({}, opts, { icon }));
+    }
+
     async function geocode(query) {
         const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`;
         const res = await fetch(url, { headers: { 'Accept': 'application/json' }});
@@ -140,11 +165,8 @@ $username = $_SESSION['username'] ?? 'Collector';
         if (!navigator.geolocation) return;
         navigator.geolocation.getCurrentPosition((pos) => {
             const latlng = [pos.coords.latitude, pos.coords.longitude];
-            if (!meMarker) {
-                meMarker = L.marker(latlng, { icon: L.icon({
-                    iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-                    shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png'
-                })}).bindPopup('You are here');
+                    if (!meMarker) {
+                meMarker = L.marker(latlng, { icon: collectorIcon }).bindPopup('You are here');
                 meMarker.addTo(map);
             } else {
                 meMarker.setLatLng(latlng);
@@ -172,10 +194,16 @@ $username = $_SESSION['username'] ?? 'Collector';
                     if (!isFinite(lat) || !isFinite(lng)) return;
 
                     // Update or create marker for this collector
+                    const heading = parseFloat(data.heading) || 0;
                     if (markersByCollector[id]) {
                         markersByCollector[id].setLatLng([lat, lng]);
+                        // Update rotation by replacing icon
+                        const newMarker = createRotatingMarker([lat, lng], heading, { title: 'Collector ' + id });
+                        newMarker.addTo(collectorsLayer);
+                        collectorsLayer.removeLayer(markersByCollector[id]);
+                        markersByCollector[id] = newMarker;
                     } else {
-                        const m = L.marker([lat, lng], { title: 'Collector ' + id }).bindPopup('Collector: ' + id);
+                        const m = createRotatingMarker([lat, lng], heading, { title: 'Collector ' + id }).bindPopup('Collector: ' + id);
                         m.addTo(collectorsLayer);
                         markersByCollector[id] = m;
                     }
@@ -188,11 +216,9 @@ $username = $_SESSION['username'] ?? 'Collector';
     if (navigator.geolocation) {
         const watchId = navigator.geolocation.watchPosition(async (pos) => {
             const latlng = [pos.coords.latitude, pos.coords.longitude];
+            const heading = (pos.coords.heading !== null && !isNaN(pos.coords.heading)) ? pos.coords.heading : 0;
             if (!meMarker) {
-                meMarker = L.marker(latlng, { icon: L.icon({
-                    iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-                    shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png'
-                })}).bindPopup('You are here');
+                meMarker = createRotatingMarker(latlng, heading, { title: 'You' }).bindPopup('You are here');
                 meMarker.addTo(map);
             } else {
                 meMarker.setLatLng(latlng);
@@ -203,7 +229,7 @@ $username = $_SESSION['username'] ?? 'Collector';
                 await fetch('../../api/update_collector_location.php', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ latitude: latlng[0], longitude: latlng[1] })
+                    body: JSON.stringify({ latitude: latlng[0], longitude: latlng[1], heading })
                 });
             } catch (e) {
                 console.warn('Failed to post location', e);

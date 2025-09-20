@@ -166,6 +166,9 @@ $notifications = $stmt->get_result();
                         <a class="nav-link text-white" href="collectors.php">
                             <i class="fas fa-users me-2"></i>Collectors
                         </a>
+                        <a class="nav-link text-white" href="tracking.php">
+                            <i class="fas fa-map-marker-alt me-2"></i>Tracking
+                        </a>
                         <a class="nav-link text-white" href="residents.php">
                             <i class="fas fa-home me-2"></i>Residents
                         </a>
@@ -281,6 +284,11 @@ $notifications = $stmt->get_result();
                                         <div class="col-md-3 mb-3">
                                             <a href="schedules.php" class="btn btn-primary w-100">
                                                 <i class="fas fa-calendar-plus me-2"></i>Manage Schedules
+                                            </a>
+                                        </div>
+                                        <div class="col-md-3 mb-3">
+                                            <a href="tracking.php" class="btn btn-secondary w-100">
+                                                <i class="fas fa-map-marker-alt me-2"></i>Live Tracking
                                             </a>
                                         </div>
                                         <div class="col-md-3 mb-3">

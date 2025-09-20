@@ -29,6 +29,7 @@ if (!is_array($data)) {
 
 $lat = isset($data['latitude']) ? (float)$data['latitude'] : null;
 $lng = isset($data['longitude']) ? (float)$data['longitude'] : null;
+$heading = isset($data['heading']) ? (float)$data['heading'] : null;
 
 if ($lat === null || $lng === null) {
     http_response_code(422);
@@ -38,8 +39,18 @@ if ($lat === null || $lng === null) {
 
 try {
     // Upsert into collector_locations table
-    $stmt = $conn->prepare("REPLACE INTO collector_locations (collector_id, latitude, longitude, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)");
-    $stmt->bind_param('idd', $collector_id, $lat, $lng);
+    // If heading column exists, include it; otherwise upsert without heading
+    $hasHeadingColumn = false;
+    $r = $conn->query("SHOW COLUMNS FROM collector_locations LIKE 'heading'");
+    if ($r && $r->num_rows > 0) { $hasHeadingColumn = true; }
+
+    if ($hasHeadingColumn) {
+        $stmt = $conn->prepare("REPLACE INTO collector_locations (collector_id, latitude, longitude, heading, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)");
+        $stmt->bind_param('iddf', $collector_id, $lat, $lng, $heading);
+    } else {
+        $stmt = $conn->prepare("REPLACE INTO collector_locations (collector_id, latitude, longitude, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)");
+        $stmt->bind_param('idd', $collector_id, $lat, $lng);
+    }
     $stmt->execute();
 
     // Broadcast via Pusher if configured
@@ -49,12 +60,14 @@ try {
             try {
                 $options = ['cluster' => PUSHER_CLUSTER, 'useTLS' => PUSHER_USE_TLS];
                 $pusher = new Pusher\Pusher(PUSHER_KEY, PUSHER_SECRET, PUSHER_APP_ID, $options);
-                $pusher->trigger('collectors-channel', 'collector-location', [
+                $payload = [
                     'collector_id' => $collector_id,
                     'latitude' => $lat,
                     'longitude' => $lng,
                     'updated_at' => date('c')
-                ]);
+                ];
+                if ($heading !== null) $payload['heading'] = $heading;
+                $pusher->trigger('collectors-channel', 'collector-location', $payload);
             } catch (Exception $e) {
                 // non-fatal
                 error_log('Pusher send failed: ' . $e->getMessage());

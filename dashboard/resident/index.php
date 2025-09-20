@@ -273,8 +273,23 @@ $notifications = $stmt->get_result();
                         </div>
                     </div>
 
-                    <!-- Recent Reports and Schedule -->
+                                <!-- Recent Reports and Schedule -->
                     <div class="row">
+                                    <!-- Live Tracking for Residents -->
+                                    <div class="col-md-12 mb-4">
+                                        <div class="card">
+                                            <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                                                        <h5 class="mb-0"><i class="fas fa-map-marker-alt me-2"></i>Nearby Collectors (Live)</h5>
+                                                        <div>
+                                                            <button id="nearestCollectorBtn" class="btn btn-sm btn-outline-primary"><i class="fas fa-location-crosshairs me-1"></i>Nearest Collector</button>
+                                                        </div>
+                                                    </div>
+                                            <div class="card-body">
+                                                <div id="residentMap" style="height:300px;"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+
                         <!-- Recent Reports -->
                         <div class="col-md-6 mb-4">
                             <div class="card">
@@ -393,5 +408,169 @@ $notifications = $stmt->get_result();
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="<?php echo BASE_URL; ?>assets/js/notifications.js"></script>
     <script src="<?php echo BASE_URL; ?>assets/js/register_sw.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://js.pusher.com/7.2/pusher.min.js"></script>
+    <script>
+    (function(){
+        const map = L.map('residentMap').setView([14.5995,120.9842],12);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+
+        const markers = {};
+
+        // helper: create a DivIcon with rotated truck image
+        function createRotatedIcon(angle) {
+            const imgUrl = '../../assets/collector_icon.png';
+            const size = 40;
+            const html = `
+                <div style="width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;">
+                    <img src="${imgUrl}" style="width:${size}px;height:${size}px;transform:rotate(${angle}deg);-webkit-transform:rotate(${angle}deg);"> 
+                </div>`;
+            return L.divIcon({
+                html: html,
+                className: '',
+                iconSize: [size, size],
+                iconAnchor: [size/2, size/2],
+                popupAnchor: [0, -size/2]
+            });
+        }
+
+        // Find the nearest collector to given point (lat,lng). If point is null, use map center.
+        function findNearestCollectorPoint(refLatLng) {
+            let best = null;
+            let bestDist = Infinity;
+            for (const id of Object.keys(markers)) {
+                try {
+                    const m = markers[id];
+                    if (!m) continue;
+                    const pos = m.getLatLng();
+                    if (!pos) continue;
+                    const d = refLatLng ? map.distance(refLatLng, pos) : map.distance(map.getCenter(), pos);
+                    if (d < bestDist) { bestDist = d; best = pos; }
+                } catch (e) { /* ignore */ }
+            }
+            return best;
+        }
+
+        // Center map on nearest collector using browser geolocation when available
+        async function centerOnNearestCollector() {
+            // helper to actually center
+            const doCenter = (ref) => {
+                const nearest = findNearestCollectorPoint(ref);
+                if (nearest) {
+                    map.flyTo(nearest, 15, { duration: 0.8 });
+                } else {
+                    // no collector points yet; show a small toast or console
+                    console.warn('No collector locations available to center on');
+                }
+            };
+
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition((pos) => {
+                    const ref = L.latLng(pos.coords.latitude, pos.coords.longitude);
+                    doCenter(ref);
+                }, (err) => {
+                    // fallback to using map center
+                    console.warn('Geolocation failed, using map center', err);
+                    doCenter(null);
+                }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 7000 });
+            } else {
+                doCenter(null);
+            }
+        }
+
+        async function load() {
+            try {
+                const res = await fetch('../../api/get_collectors_locations_public.php');
+                const json = await res.json();
+                if (!json.success) return;
+                        // define collector icon (use collector_icon.png if available, fallback to collector.png)
+                        const collectorIconUrl = '../../assets/collector_icon.png';
+                        const collectorIconFallback = '../../assets/collector.png';
+                        const collectorIcon = L.icon({
+                            iconUrl: collectorIconUrl,
+                            iconRetinaUrl: collectorIconUrl,
+                            iconSize: [40, 40],
+                            iconAnchor: [20, 20],
+                            popupAnchor: [0, -18]
+                        });
+
+                        for (const c of json.collectors) {
+                            if (!c.latitude || !c.longitude) continue;
+                            const id = String(c.collector_id);
+                            const name = c.name || ('Collector ' + id);
+                            const lat = parseFloat(c.latitude), lng = parseFloat(c.longitude);
+                            const popup = `<strong>${name}</strong><br>Last seen: ${c.updated_at || 'N/A'}`;
+                            const heading = (c.heading !== undefined && c.heading !== null) ? parseFloat(c.heading) : null;
+                            if (markers[id]) {
+                                markers[id].setLatLng([lat,lng]);
+                                markers[id].setPopupContent(popup);
+                                if (heading !== null) {
+                                    // update icon with rotation
+                                    markers[id].setIcon(createRotatedIcon(heading));
+                                }
+                            } else {
+                                let marker;
+                                if (heading !== null) marker = L.marker([lat,lng], { icon: createRotatedIcon(heading) });
+                                else marker = L.marker([lat,lng], { icon: collectorIcon });
+                                marker.addTo(map).bindPopup(popup);
+                                markers[id] = marker;
+                            }
+                        }
+            } catch (e) { console.warn(e); }
+        }
+
+        load();
+
+        // wire up nearest collector button
+        try {
+            const btn = document.getElementById('nearestCollectorBtn');
+            if (btn) btn.addEventListener('click', () => {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Locating...';
+                centerOnNearestCollector().finally(() => {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-location-crosshairs me-1"></i>Nearest Collector';
+                });
+            });
+        } catch (e) { console.warn('Nearest Collector button hookup failed', e); }
+
+        // Pusher realtime updates
+        try {
+            const PUSHER_KEY = <?php echo json_encode(PUSHER_KEY); ?>;
+            const PUSHER_CLUSTER = <?php echo json_encode(PUSHER_CLUSTER); ?>;
+            const PUSHER_USE_TLS = <?php echo PUSHER_USE_TLS ? 'true' : 'false'; ?>;
+            if (PUSHER_KEY) {
+                const pusher = new Pusher(PUSHER_KEY, { cluster: PUSHER_CLUSTER, forceTLS: PUSHER_USE_TLS });
+                const channel = pusher.subscribe('collectors-channel');
+                channel.bind('collector-location', function(data) {
+                    const id = String(data.collector_id);
+                    const lat = parseFloat(data.latitude), lng = parseFloat(data.longitude);
+                    if (!lat || !lng) return;
+                    const popup = `<strong>${data.name || ('Collector ' + id)}</strong><br>Last seen: ${data.updated_at || new Date().toISOString()}`;
+                    const heading = (data.heading !== undefined && data.heading !== null) ? parseFloat(data.heading) : null;
+                    if (markers[id]) {
+                        markers[id].setLatLng([lat,lng]);
+                        markers[id].setPopupContent(popup);
+                        if (heading !== null) markers[id].setIcon(createRotatedIcon(heading));
+                    } else {
+                        if (heading !== null) markers[id] = L.marker([lat,lng], { icon: createRotatedIcon(heading) }).addTo(map).bindPopup(popup);
+                        else {
+                            const collectorIconUrl = '../../assets/collector_icon.png';
+                            const collectorIcon = L.icon({
+                                iconUrl: collectorIconUrl,
+                                iconRetinaUrl: collectorIconUrl,
+                                iconSize: [40,40],
+                                iconAnchor: [20,20],
+                                popupAnchor: [0,-18]
+                            });
+                            markers[id] = L.marker([lat,lng], { icon: collectorIcon }).addTo(map).bindPopup(popup);
+                        }
+                    }
+                });
+            }
+        } catch (e) { console.warn('Pusher init failed', e); }
+    })();
+    </script>
 </body>
 </html>
