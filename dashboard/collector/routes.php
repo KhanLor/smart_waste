@@ -81,6 +81,7 @@ $username = $_SESSION['username'] ?? 'Collector';
                                             <th>Area / Street</th>
                                             <th>Waste</th>
                                             <th>Status</th>
+                                            <th>Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody id="rows"></tbody>
@@ -107,16 +108,42 @@ $username = $_SESSION['username'] ?? 'Collector';
         tbody.innerHTML = '';
         if (data.success && data.tasks.length) {
             summary.textContent = `${data.count} tasks for ${data.day}`;
+            // compute distance / ETA summary
+            try {
+                const pts = data.tasks.map(t => (t.latitude && t.longitude) ? [parseFloat(t.latitude), parseFloat(t.longitude)] : null).filter(Boolean);
+                const totalMeters = pts.reduce((acc, cur, idx) => {
+                    if (idx === 0) return 0;
+                    return acc + haversineDistanceMeters(pts[idx-1], cur);
+                }, 0);
+                const km = (totalMeters/1000).toFixed(2);
+                const avgSpeedKmph = 30; // assumption
+                const hours = totalMeters/1000/avgSpeedKmph;
+                const etaMinutes = Math.round(hours * 60);
+                summary.textContent += ` — Distance: ${km} km, ETA: ${etaMinutes} min (est)`;
+            } catch (e) { console.warn('Failed to compute ETA', e); }
             for (const t of data.tasks) {
                 const tr = document.createElement('tr');
+                const lat = t.latitude ? parseFloat(t.latitude) : '';
+                const lng = t.longitude ? parseFloat(t.longitude) : '';
                 tr.innerHTML = `
                     <td><strong>${t.collection_time}</strong></td>
                     <td>${t.area || ''} ${t.street_name ? '- ' + t.street_name : ''}</td>
                     <td><span class="badge bg-info text-dark">${t.waste_type}</span></td>
                     <td><span class="badge bg-secondary text-uppercase">${(t.status || '').replace('_',' ')}</span></td>
+                    <td>
+                      <button class="btn btn-sm btn-outline-primary view-map" data-lat="${lat}" data-lng="${lng}">View on Map</button>
+                      <a class="btn btn-sm btn-outline-secondary ms-1" target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}">Navigate</a>
+                      <div class="btn-group ms-2" role="group">
+                        <button class="btn btn-sm btn-success action-start" data-id="${t.id}">Start</button>
+                        <button class="btn btn-sm btn-warning action-progress" data-id="${t.id}">In Progress</button>
+                        <button class="btn btn-sm btn-secondary action-complete" data-id="${t.id}">Complete</button>
+                      </div>
+                    </td>
                 `;
                 tbody.appendChild(tr);
             }
+            // attach handlers
+            attachRowHandlers();
         } else {
             summary.textContent = 'No tasks found.';
             const tr = document.createElement('tr');
@@ -127,6 +154,90 @@ $username = $_SESSION['username'] ?? 'Collector';
             tr.appendChild(td);
             tbody.appendChild(tr);
         }
+    }
+
+    function haversineDistanceMeters(a, b) {
+        // a,b = [lat, lng]
+        const R = 6371000;
+        const toRad = (d) => d * Math.PI / 180;
+        const dLat = toRad(b[0] - a[0]);
+        const dLon = toRad(b[1] - a[1]);
+        const lat1 = toRad(a[0]);
+        const lat2 = toRad(b[0]);
+        const sinDLat = Math.sin(dLat/2);
+        const sinDLon = Math.sin(dLon/2);
+        const aa = sinDLat*sinDLat + Math.cos(lat1)*Math.cos(lat2)*sinDLon*sinDLon;
+        const c = 2 * Math.atan2(Math.sqrt(aa), Math.sqrt(1-aa));
+        return R * c;
+    }
+
+    function attachRowHandlers() {
+        document.querySelectorAll('.view-map').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const lat = btn.getAttribute('data-lat');
+                const lng = btn.getAttribute('data-lng');
+                if (!lat || !lng) { alert('No coordinates for this stop'); return; }
+                // open map and pass params so it centers on the stop
+                const url = new URL('map.php', window.location.href);
+                url.searchParams.set('lat', lat);
+                url.searchParams.set('lng', lng);
+                window.open(url.toString(), '_blank');
+            });
+        });
+
+        document.querySelectorAll('.action-start').forEach(b => b.addEventListener('click', () => updateTaskStatus(b.getAttribute('data-id'), 'in_progress')));
+        document.querySelectorAll('.action-progress').forEach(b => b.addEventListener('click', () => updateTaskStatus(b.getAttribute('data-id'), 'in_progress')));
+        document.querySelectorAll('.action-complete').forEach(b => b.addEventListener('click', () => updateTaskStatus(b.getAttribute('data-id'), 'completed')));
+
+        // export buttons: add if not present
+        if (!document.getElementById('exportBtns')) {
+            const exportWrap = document.createElement('div');
+            exportWrap.id = 'exportBtns';
+            exportWrap.className = 'mt-2 mb-2';
+            exportWrap.innerHTML = `<button id="exportJson" class="btn btn-outline-primary btn-sm me-2">Export JSON</button><button id="exportGpx" class="btn btn-outline-secondary btn-sm">Export GPX</button>`;
+            document.querySelector('.card-body').insertBefore(exportWrap, document.querySelector('.table-responsive'));
+            document.getElementById('exportJson').addEventListener('click', exportJson);
+            document.getElementById('exportGpx').addEventListener('click', exportGpx);
+        }
+    }
+
+    async function updateTaskStatus(id, status) {
+        try {
+            const res = await fetch('../../api/update_task_status.php', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id, status: status })
+            });
+            const j = await res.json();
+            if (j.success) { loadRoutes(); }
+            else alert('Failed to update: ' + (j.error || 'unknown'));
+        } catch (e) { console.warn('Update failed', e); alert('Update failed'); }
+    }
+
+    function exportJson() {
+        const day = document.getElementById('day').value;
+        fetch(`../../api/get_collector_tasks.php?day=${encodeURIComponent(day)}`).then(r=>r.json()).then(data=>{
+            if (!data.success) return alert('No tasks to export');
+            const blob = new Blob([JSON.stringify(data.tasks, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); a.href = url; a.download = `routes_${day}.json`; a.click(); URL.revokeObjectURL(url);
+        });
+    }
+
+    function exportGpx() {
+        const day = document.getElementById('day').value;
+        fetch(`../../api/get_collector_tasks.php?day=${encodeURIComponent(day)}`).then(r=>r.json()).then(data=>{
+            if (!data.success) return alert('No tasks to export');
+            const gpxParts = ['<?xml version="1.0" encoding="UTF-8"?>','<gpx version="1.1" creator="SmartWaste">','<trk>','<name>Route</name>','<trkseg>'];
+            for (const t of data.tasks) {
+                if (t.latitude && t.longitude) {
+                    gpxParts.push(`<trkpt lat="${t.latitude}" lon="${t.longitude}"><time>${new Date().toISOString()}</time></trkpt>`);
+                }
+            }
+            gpxParts.push('</trkseg>','</trk>','</gpx>');
+            const blob = new Blob([gpxParts.join('\n')], { type: 'application/gpx+xml' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); a.href = url; a.download = `routes_${day}.gpx`; a.click(); URL.revokeObjectURL(url);
+        });
     }
 
     document.getElementById('filters').addEventListener('submit', (e) => { e.preventDefault(); loadRoutes(); });

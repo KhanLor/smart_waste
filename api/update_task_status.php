@@ -1,6 +1,5 @@
 <?php
 require_once '../config/config.php';
-
 header('Content-Type: application/json');
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -9,22 +8,27 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-// require_login(); // Uncomment in production
-
-$user_role = $_SESSION['role'] ?? '';
-$collector_id = $_SESSION['user_id'] ?? null;
-
-if ($user_role !== 'collector' || !$collector_id) {
+// must be logged in as collector
+if (($_SESSION['role'] ?? '') !== 'collector' || empty($_SESSION['user_id'])) {
     http_response_code(403);
     echo json_encode(['error' => 'Forbidden']);
     exit;
 }
 
-$input = $_POST;
-$task_id = isset($input['task_id']) ? intval($input['task_id']) : 0;
-$new_status = trim($input['status'] ?? ''); // expected: in_progress|completed|pending
-$valid_statuses = ['pending','in_progress','completed'];
+$collector_id = $_SESSION['user_id'];
 
+// Accept either JSON body or form-encoded POST (for compatibility)
+$raw = file_get_contents('php://input');
+$data = json_decode($raw, true);
+if (!is_array($data)) {
+    // fallback to $_POST
+    $data = $_POST;
+}
+
+$task_id = isset($data['id']) ? intval($data['id']) : (isset($data['task_id']) ? intval($data['task_id']) : 0);
+$new_status = isset($data['status']) ? trim($data['status']) : '';
+
+$valid_statuses = ['pending','in_progress','completed'];
 if ($task_id <= 0 || !in_array($new_status, $valid_statuses, true)) {
     http_response_code(422);
     echo json_encode(['error' => 'Invalid task_id or status']);
@@ -36,14 +40,14 @@ try {
     $stmt = $conn->prepare("SELECT id FROM collection_schedules WHERE id = ? AND assigned_collector = ?");
     $stmt->bind_param('ii', $task_id, $collector_id);
     $stmt->execute();
-    $exists = $stmt->get_result()->fetch_assoc();
-    if (!$exists) {
+    $res = $stmt->get_result();
+    if (!$res || $res->num_rows === 0) {
         http_response_code(404);
         echo json_encode(['error' => 'Task not found']);
         exit;
     }
 
-    // Update schedule status
+    // Update schedule status and updated_at
     $stmt = $conn->prepare("UPDATE collection_schedules SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
     $stmt->bind_param('si', $new_status, $task_id);
     $stmt->execute();
@@ -60,6 +64,7 @@ try {
     http_response_code(500);
     echo json_encode(['error' => 'Internal server error: ' . $e->getMessage()]);
 }
+
 ?>
 
 

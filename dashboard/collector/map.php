@@ -197,6 +197,19 @@ $username = $_SESSION['username'] ?? 'Collector';
 
     loadStops();
 
+    // If URL parameters lat & lng are provided (from 'View on Map'), center on them
+    (function centerFromParams(){
+        try {
+            const params = new URLSearchParams(window.location.search);
+            const lat = parseFloat(params.get('lat'));
+            const lng = parseFloat(params.get('lng'));
+            if (isFinite(lat) && isFinite(lng)) {
+                map.setView([lat,lng], 16);
+                const m = L.marker([lat,lng]).addTo(map).bindPopup('Selected stop').openPopup();
+            }
+        } catch (e) { /* ignore */ }
+    })();
+
     // --- Realtime: Pusher subscribe to collector location updates ---
     try {
         if (typeof Pusher !== 'undefined' && PUSHER_KEY) {
