@@ -78,6 +78,8 @@ $username = $_SESSION['username'] ?? 'Collector';
     let meMarker = null;
     let collectorsLayer = L.layerGroup().addTo(map);
     const markersByCollector = {}; // keyed by collector_id
+    const polylinesByCollector = {}; // keyed by collector_id -> L.Polyline
+    const MAX_PATH_POINTS = 200; // keep last N points to avoid memory growth
 
     // Collector truck icon
     const collectorIcon = L.icon({
@@ -178,6 +180,21 @@ $username = $_SESSION['username'] ?? 'Collector';
     document.getElementById('locateBtn').addEventListener('click', locateMe);
     document.getElementById('reloadBtn').addEventListener('click', loadStops);
 
+    // Toggle to show/hide collector paths
+    const togglePathBtn = document.createElement('button');
+    togglePathBtn.className = 'btn btn-outline-info btn-sm ms-2';
+    togglePathBtn.id = 'togglePathsBtn';
+    togglePathBtn.innerHTML = '<i class="fas fa-route me-1"></i>Toggle Paths';
+    document.getElementById('reloadBtn').parentNode.appendChild(togglePathBtn);
+    let pathsVisible = true;
+    togglePathBtn.addEventListener('click', () => {
+        pathsVisible = !pathsVisible;
+        for (const id in polylinesByCollector) {
+            const p = polylinesByCollector[id];
+            if (pathsVisible) map.addLayer(p); else map.removeLayer(p);
+        }
+    });
+
     loadStops();
 
     // --- Realtime: Pusher subscribe to collector location updates ---
@@ -187,6 +204,8 @@ $username = $_SESSION['username'] ?? 'Collector';
             const channel = pusher.subscribe('collectors-channel');
             channel.bind('collector-location', function(data) {
                 try {
+                    // Debug: show incoming pusher payloads for troubleshooting
+                    console.debug('[PUSHER] collector-location received', data);
                     if (!data || !data.collector_id) return;
                     const id = String(data.collector_id);
                     const lat = parseFloat(data.latitude);
@@ -202,10 +221,26 @@ $username = $_SESSION['username'] ?? 'Collector';
                         newMarker.addTo(collectorsLayer);
                         collectorsLayer.removeLayer(markersByCollector[id]);
                         markersByCollector[id] = newMarker;
+                        // Append to polyline for this collector
+                        try {
+                            if (!polylinesByCollector[id]) {
+                                polylinesByCollector[id] = L.polyline([[lat, lng]], { color: '#28a745', weight: 4, opacity: 0.8 }).addTo(map);
+                            } else {
+                                const pts = polylinesByCollector[id].getLatLngs();
+                                pts.push(L.latLng(lat, lng));
+                                // limit length
+                                if (pts.length > MAX_PATH_POINTS) pts.splice(0, pts.length - MAX_PATH_POINTS);
+                                polylinesByCollector[id].setLatLngs(pts);
+                            }
+                        } catch (e) { console.warn('Polyline update error', e); }
                     } else {
                         const m = createRotatingMarker([lat, lng], heading, { title: 'Collector ' + id }).bindPopup('Collector: ' + id);
                         m.addTo(collectorsLayer);
                         markersByCollector[id] = m;
+                        // create polyline starting at this location
+                        try {
+                            polylinesByCollector[id] = L.polyline([[lat, lng]], { color: '#28a745', weight: 4, opacity: 0.8 }).addTo(map);
+                        } catch (e) { console.warn('Create polyline error', e); }
                     }
                 } catch (e) { console.warn('Pusher handler error', e); }
             });
@@ -217,20 +252,44 @@ $username = $_SESSION['username'] ?? 'Collector';
         const watchId = navigator.geolocation.watchPosition(async (pos) => {
             const latlng = [pos.coords.latitude, pos.coords.longitude];
             const heading = (pos.coords.heading !== null && !isNaN(pos.coords.heading)) ? pos.coords.heading : 0;
+            // Debug: show watchPosition update
+            console.debug('[GEO] watchPosition', { lat: latlng[0], lng: latlng[1], heading });
             if (!meMarker) {
                 meMarker = createRotatingMarker(latlng, heading, { title: 'You' }).bindPopup('You are here');
                 meMarker.addTo(map);
             } else {
                 meMarker.setLatLng(latlng);
             }
+            // Append to my collector polyline as well (if collector id known)
+            try {
+                const myId = String(CURRENT_COLLECTOR_ID || 'me');
+                if (!polylinesByCollector[myId]) {
+                    polylinesByCollector[myId] = L.polyline([latlng], { color: '#ffc107', weight: 4, opacity: 0.9 }).addTo(map);
+                } else {
+                    const pts = polylinesByCollector[myId].getLatLngs();
+                    pts.push(L.latLng(latlng[0], latlng[1]));
+                    if (pts.length > MAX_PATH_POINTS) pts.splice(0, pts.length - MAX_PATH_POINTS);
+                    polylinesByCollector[myId].setLatLngs(pts);
+                }
+            } catch (e) { console.warn('Update my path failed', e); }
             // center map the first time
             // send to server (best-effort)
             try {
-                await fetch('../../api/update_collector_location.php', {
+                const payload = { latitude: latlng[0], longitude: latlng[1], heading };
+                // Debug: log payload and perform POST
+                console.debug('[POST] update_collector_location payload', payload);
+                const resp = await fetch('../../api/update_collector_location.php', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ latitude: latlng[0], longitude: latlng[1], heading })
+                    body: JSON.stringify(payload)
                 });
+                // Try to parse json response for debugging
+                try {
+                    const json = await resp.json();
+                    console.debug('[POST] update_collector_location response', resp.status, json);
+                } catch (parseErr) {
+                    console.warn('[POST] update_collector_location non-JSON response', resp.status, resp.statusText);
+                }
             } catch (e) {
                 console.warn('Failed to post location', e);
             }

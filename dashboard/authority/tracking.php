@@ -85,6 +85,8 @@ $username = $_SESSION['username'] ?? 'Authority';
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
 
     const markers = {};
+    const polylinesByCollector = {};
+    const MAX_PATH_POINTS = 200;
 
     // Rotated truck icon helper
     function createRotatedIcon(angle) {
@@ -128,11 +130,31 @@ $username = $_SESSION['username'] ?? 'Authority';
                     if (heading !== null) markers[id] = L.marker([lat,lng], { icon: createRotatedIcon(heading) }).addTo(map).bindPopup(`<strong>${name}</strong><br>${updated}`);
                     else markers[id] = L.marker([lat,lng]).addTo(map).bindPopup(`<strong>${name}</strong><br>${updated}`);
                 }
+                try { if (!polylinesByCollector[id]) polylinesByCollector[id] = L.polyline([[lat,lng]], { color: '#28a745', weight: 4, opacity: 0.8 }).addTo(map); } catch (e) { console.warn('Create polyline error', e); }
             }
         }
     }
 
     loadCollectors();
+
+    // Toggle paths button
+    (function addToggle(){
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-outline-info btn-sm';
+        btn.style.position = 'absolute';
+        btn.style.right = '18px';
+        btn.style.top = '18px';
+        btn.innerHTML = '<i class="fas fa-route me-1"></i>Toggle Paths';
+        document.body.appendChild(btn);
+        let visible = true;
+        btn.addEventListener('click', () => {
+            visible = !visible;
+            for (const id in polylinesByCollector) {
+                const p = polylinesByCollector[id];
+                if (visible) map.addLayer(p); else map.removeLayer(p);
+            }
+        });
+    })();
 
     // Pusher updates
     try {
@@ -153,6 +175,17 @@ $username = $_SESSION['username'] ?? 'Authority';
                     if (heading !== null) markers[id] = L.marker([lat,lng], { icon: createRotatedIcon(heading) }).addTo(map).bindPopup((data.name || ('Collector ' + id)) + '<br>' + updated);
                     else markers[id] = L.marker([lat,lng]).addTo(map).bindPopup((data.name || ('Collector ' + id)) + '<br>' + updated);
                 }
+                // append to polyline
+                try {
+                    if (!polylinesByCollector[id]) {
+                        polylinesByCollector[id] = L.polyline([[lat,lng]], { color: '#28a745', weight: 4, opacity: 0.8 }).addTo(map);
+                    } else {
+                        const pts = polylinesByCollector[id].getLatLngs();
+                        pts.push(L.latLng(lat,lng));
+                        if (pts.length > MAX_PATH_POINTS) pts.splice(0, pts.length - MAX_PATH_POINTS);
+                        polylinesByCollector[id].setLatLngs(pts);
+                    }
+                } catch (e) { console.warn('Polyline update error', e); }
                 // Update list timestamp by collector id
                 const item = document.querySelector(`#collectorList [data-collector-id='${id}']`);
                 if (item) {

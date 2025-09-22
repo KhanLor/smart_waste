@@ -416,7 +416,9 @@ $notifications = $stmt->get_result();
         const map = L.map('residentMap').setView([14.5995,120.9842],12);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
 
-        const markers = {};
+    const markers = {};
+    const polylinesByCollector = {};
+    const MAX_PATH_POINTS = 200;
 
         // helper: create a DivIcon with rotated truck image
         function createRotatedIcon(angle) {
@@ -516,6 +518,10 @@ $notifications = $stmt->get_result();
                                 marker.addTo(map).bindPopup(popup);
                                 markers[id] = marker;
                             }
+                            // create polyline starting at this location
+                            try {
+                                if (!polylinesByCollector[id]) polylinesByCollector[id] = L.polyline([[lat,lng]], { color: '#28a745', weight: 4, opacity: 0.8 }).addTo(map);
+                            } catch (e) { console.warn('Create polyline error', e); }
                         }
             } catch (e) { console.warn(e); }
         }
@@ -534,6 +540,27 @@ $notifications = $stmt->get_result();
                 });
             });
         } catch (e) { console.warn('Nearest Collector button hookup failed', e); }
+
+        // add toggle paths button next to nearestCollectorBtn (inside IIFE so it can access map/polylines)
+        try {
+            const btn = document.getElementById('nearestCollectorBtn');
+            if (btn && btn.parentNode) {
+                const toggle = document.createElement('button');
+                toggle.className = 'btn btn-sm btn-outline-info ms-2';
+                toggle.id = 'togglePathsBtn';
+                toggle.innerHTML = '<i class="fas fa-route me-1"></i>Toggle Paths';
+                btn.parentNode.appendChild(toggle);
+                let visible = true;
+                toggle.addEventListener('click', () => {
+                    visible = !visible;
+                    for (const id in polylinesByCollector) {
+                        const p = polylinesByCollector[id];
+                        if (!p) continue;
+                        if (visible) map.addLayer(p); else map.removeLayer(p);
+                    }
+                });
+            }
+        } catch (e) { console.warn('Toggle Paths hookup failed', e); }
 
         // Pusher realtime updates
         try {
@@ -567,6 +594,17 @@ $notifications = $stmt->get_result();
                             markers[id] = L.marker([lat,lng], { icon: collectorIcon }).addTo(map).bindPopup(popup);
                         }
                     }
+                    // append to polyline
+                    try {
+                        if (!polylinesByCollector[id]) {
+                            polylinesByCollector[id] = L.polyline([[lat,lng]], { color: '#28a745', weight: 4, opacity: 0.8 }).addTo(map);
+                        } else {
+                            const pts = polylinesByCollector[id].getLatLngs();
+                            pts.push(L.latLng(lat,lng));
+                            if (pts.length > MAX_PATH_POINTS) pts.splice(0, pts.length - MAX_PATH_POINTS);
+                            polylinesByCollector[id].setLatLngs(pts);
+                        }
+                    } catch (e) { console.warn('Polyline update error', e); }
                 });
             }
         } catch (e) { console.warn('Pusher init failed', e); }
