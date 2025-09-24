@@ -18,7 +18,13 @@ async function registerServiceWorker() {
 
 // Subscribe to push notifications
 async function subscribeToPush(registration) {
-    const publicKey = '<?php echo VAPID_PUBLIC_KEY; ?>';
+    // The VAPID public key is injected at runtime by the page into window.__VAPID_PUBLIC_KEY__
+    const publicKey = window.__VAPID_PUBLIC_KEY__ || '';
+
+    if (!publicKey) {
+        console.error('VAPID public key not found on page (window.__VAPID_PUBLIC_KEY__)');
+        return;
+    }
 
     try {
         const subscription = await registration.pushManager.subscribe({

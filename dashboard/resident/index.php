@@ -407,6 +407,10 @@ $notifications = $stmt->get_result();
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="<?php echo BASE_URL; ?>assets/js/notifications.js"></script>
+    <script>
+        // Inject VAPID public key for the service worker registration script
+        window.__VAPID_PUBLIC_KEY__ = <?php echo json_encode(VAPID_PUBLIC_KEY); ?>;
+    </script>
     <script src="<?php echo BASE_URL; ?>assets/js/register_sw.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
